@@ -1,0 +1,35 @@
+name: Docker Build & Push
+
+# 触发时机：master 分支 push / PR 合入
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 设置镜像名称和版本
+        id: meta
+        run: |
+          # 替换成你自己的仓库名/镜像名
+          echo "IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/etf-monitor" >> $GITHUB_OUTPUT
+          echo "IMAGE_TAG=latest" >> $GITHUB_OUTPUT
+
+      - name: 构建并推送镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.IMAGE_NAME }}:${{ steps.meta.outputs.IMAGE_TAG }}
