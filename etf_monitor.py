@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-场内ETF监控（仅2026交易日交易时间运行）—— 支持临时停牌自动重试 + 可配置间隔
+场内ETF监控（仅2026交易日交易时间运行）—— 修复涨跌幅不准 + 可配置停牌重试
 """
 
 import requests
@@ -32,12 +32,11 @@ class ETFMonitor:
         self.feishu_webhook = config.get("feishu_webhook")
         self.proxy = config.get("proxy")
         self.interval = config.get("interval", 5)
-        # 可配置：临时停牌重试间隔（分钟）
         self.suspend_retry_min = config.get("suspend_retry_min", 5)
 
         self.notify_record = {}
         self.fail_count = {}
-        self.temp_suspended = {}  # {code: 首次失败时间}
+        self.temp_suspended = {}
 
         self.session = requests.Session()
         if self.proxy:
@@ -45,17 +44,14 @@ class ETFMonitor:
 
     # ---------- 2026 交易日 + 交易时间判断 ----------
     def is_trading_time(self):
-        """判断当前是否为 2026 年 A 股交易日 + 交易时间"""
         now = datetime.now()
-        weekday = now.weekday()  # 0=周一, 6=周日
+        weekday = now.weekday()
         current_time = now.time()
         today_str = now.strftime("%Y-%m-%d")
 
-        # 1. 周末直接非交易
         if weekday >= 5:
             return False
 
-        # 2. 2026 年 A 股休市日（交易所官方）
         holiday_list = {
             "2026-01-01", "2026-01-02", "2026-01-03",
             "2026-02-15", "2026-02-16", "2026-02-17", "2026-02-18",
@@ -70,7 +66,6 @@ class ETFMonitor:
         if today_str in holiday_list:
             return False
 
-        # 3. 交易时段：9:30~11:30、13:00~15:00
         am_start = dt_time(9, 30)
         am_end = dt_time(11, 30)
         pm_start = dt_time(13, 0)
@@ -81,27 +76,27 @@ class ETFMonitor:
 
         return in_am or in_pm
 
-    # ---------- 价格获取 ----------
+    # ---------- 价格获取（修复涨跌幅） ----------
     def get_etf_price(self, code):
-        price, name, change_today, open_price = None, None, 0.0, 0.0
+        price, name, change_today, open_price, pre_close = None, None, 0.0, 0.0, 0.0
 
         sh_prefix = ("50", "51", "56", "588")
         is_sh = code.startswith(sh_prefix)
 
-        # 东方财富主源
+        # 东方财富：取 f43现价、f58名称、f60昨收、f46开盘、f169涨跌幅
         try:
             market = "1" if is_sh else "0"
             url = "https://push2.eastmoney.com/api/qt/stock/get"
             params = {
                 "secid": f"{market}.{code}",
-                "fields": "f43,f58,f170,f46,f169",
+                "fields": "f43,f58,f60,f46,f169",  # 加了 f60(昨收)、用 f169(涨跌幅)
                 "ut": "fa5fd1943cd70d26fd9a75910ab0195",
                 "fltt": "2",
                 "invt": "2",
                 "wbp2u": "|0|0|0|web"
             }
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win664; x64) AppleWebKit/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Referer": "https://quote.eastmoney.com/"
             }
 
@@ -113,23 +108,25 @@ class ETFMonitor:
                 d = data["data"]
                 f43 = d.get("f43")
                 f58 = d.get("f58")
-                f170 = d.get("f170")
+                f60 = d.get("f60")
                 f46 = d.get("f46")
+                f169 = d.get("f169")
 
-                if f43 and f58:
-                    if f43 >= 100:
-                        price = f43 / 100.0
-                    else:
-                        price = float(f43)
-
+                if f43 and f58 and f60:
+                    price = float(f43) / 100.0
+                    pre_close = float(f60) / 100.0
                     name = f58
-                    change_today = (f170 or 0) / 100.0
-                    open_price = (f46 or 0) / 100.0 if f46 else 0.0
+                    open_price = float(f46) / 100.0 if f46 else 0.0
+                    # 优先用接口涨跌幅，否则自己算
+                    if f169 is not None:
+                        change_today = float(f169)
+                    else:
+                        change_today = (price / pre_close - 1) * 100
         except Exception:
             pass
 
-        # 新浪兜底
-        if price is None or price < 0.5:
+        # 新浪兜底：自己算涨跌幅 (现价-昨收)/昨收
+        if price is None or price < 0.3:
             try:
                 market = "sh" if is_sh else "sz"
                 url = f"https://hq.sinajs.cn/list={market}{code}"
@@ -143,17 +140,17 @@ class ETFMonitor:
                 match = re.search(r'="([^"]+)"', r.text)
                 if match:
                     items = match.group(1).split(",")
-                    if len(items) >= 4 and items[3].replace('.', '').isdigit():
+                    if len(items) >= 5:
                         name = items[0]
-                        last_close = float(items[2])
-                        price = float(items[3])
                         open_price = float(items[1])
-                        if last_close > 0:
-                            change_today = round((price - last_close) / last_close * 100, 2)
+                        pre_close = float(items[2])
+                        price = float(items[3])
+                        if pre_close > 0:
+                            change_today = (price / pre_close - 1) * 100  # 自己算，最准
             except Exception:
                 pass
 
-        if price is None or price <= 0 or price < 0.3:
+        if price is None or price <= 0 or price < 0.3 or pre_close <= 0:
             return None, {}
 
         return price, {
@@ -162,6 +159,7 @@ class ETFMonitor:
             "price": round(price, 3),
             "change_today": round(change_today, 2),
             "open_price": round(open_price, 3),
+            "pre_close": round(pre_close, 3),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -186,6 +184,8 @@ class ETFMonitor:
                             f"**基金**：{info['name']}\n"
                             f"**代码**：{code}\n"
                             f"**价格**：{info['price']:.3f}\n"
+                            f"**昨收**：{info['pre_close']:.3f}\n"
+                            f"**涨跌幅**：{info['change_today']:.2f}%\n"
                             f"**触发**：\n" + "\n".join(reasons)
                         )
                     }
@@ -201,14 +201,13 @@ class ETFMonitor:
 
     # ---------- 检查逻辑 ----------
     def check(self):
-        logger.info("================================================================")
+        logger.info("=============================================================================")
         now = datetime.now()
 
         for etf in self.etfs:
             code = etf["code"]
             triggers = etf.get("triggers", {})
 
-            # 临时停牌：按配置时间重试
             if code in self.temp_suspended:
                 elapsed = now - self.temp_suspended[code]
                 wait_sec = int(self.suspend_retry_min * 60 - elapsed.total_seconds())
@@ -216,7 +215,6 @@ class ETFMonitor:
                     logger.info("%s 临时停牌中（%d秒后重试）", code, max(wait_sec, 0))
                     continue
 
-            # 获取价格
             price, info = self.get_etf_price(code)
             if not price:
                 self.fail_count[code] = self.fail_count.get(code, 0) + 1
@@ -226,18 +224,17 @@ class ETFMonitor:
                         logger.warning("%s 连续3次获取失败，进入临时停牌，%d分钟重试一次", code, self.suspend_retry_min)
                 continue
 
-            # 恢复正常
             self.fail_count[code] = 0
             if code in self.temp_suspended:
                 del self.temp_suspended[code]
                 logger.info("%s 已复牌，恢复正常监控", code)
 
-            # 正常输出
             price_below = triggers.get("price_below")
-            logger.info("监控价: %4.3f 当前价: %4.3f (%5.2f%%) (%s)%s ",
+            logger.info("监控价:%4.3f 当前价: %4.3f (%5.2f%%) (昨收:%4.3f) (%s)%s ",
                         price_below,
                         price,
                         info["change_today"],
+                        info["pre_close"],
                         code,
                         info["name"].ljust(15))
             reasons = []
@@ -299,7 +296,7 @@ def load_config():
     if sys.argv[1] == "--create":
         yaml.safe_dump({
             "interval": 5,
-            "suspend_retry_min": 5,  # 这里就是临时停牌重试分钟数
+            "suspend_retry_min": 5,
             "feishu_webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/xxx",
             "proxy": "",
             "etfs": [{
