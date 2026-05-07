@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-场内ETF监控（仅2026交易日交易时间运行）—— 修复涨跌幅不准 + 可配置停牌重试
+场内ETF监控（仅2026交易日交易时间运行）
+修复涨跌幅 + 停牌重试 + 现价/监控价百分比 + 无竖线完美对齐
 """
 
 import requests
@@ -83,13 +84,13 @@ class ETFMonitor:
         sh_prefix = ("50", "51", "56", "588")
         is_sh = code.startswith(sh_prefix)
 
-        # 东方财富：取 f43现价、f58名称、f60昨收、f46开盘、f169涨跌幅
+        # 东方财富：f43现价、f58名称、f60昨收、f46开盘
         try:
             market = "1" if is_sh else "0"
             url = "https://push2.eastmoney.com/api/qt/stock/get"
             params = {
                 "secid": f"{market}.{code}",
-                "fields": "f43,f58,f60,f46,f169",  # 加了 f60(昨收)、用 f169(涨跌幅)
+                "fields": "f43,f58,f60,f46",
                 "ut": "fa5fd1943cd70d26fd9a75910ab0195",
                 "fltt": "2",
                 "invt": "2",
@@ -110,22 +111,18 @@ class ETFMonitor:
                 f58 = d.get("f58")
                 f60 = d.get("f60")
                 f46 = d.get("f46")
-                f169 = d.get("f169")
 
                 if f43 and f58 and f60:
                     price = float(f43) / 100.0
                     pre_close = float(f60) / 100.0
                     name = f58
                     open_price = float(f46) / 100.0 if f46 else 0.0
-                    # 优先用接口涨跌幅，否则自己算
-                    if f169 is not None:
-                        change_today = float(f169)
-                    else:
-                        change_today = (price / pre_close - 1) * 100
+                    # 自己精确计算日涨跌幅
+                    change_today = (price / pre_close - 1) * 100
         except Exception:
             pass
 
-        # 新浪兜底：自己算涨跌幅 (现价-昨收)/昨收
+        # 新浪兜底
         if price is None or price < 0.3:
             try:
                 market = "sh" if is_sh else "sz"
@@ -146,7 +143,7 @@ class ETFMonitor:
                         pre_close = float(items[2])
                         price = float(items[3])
                         if pre_close > 0:
-                            change_today = (price / pre_close - 1) * 100  # 自己算，最准
+                            change_today = (price / pre_close - 1) * 100
             except Exception:
                 pass
 
@@ -185,7 +182,7 @@ class ETFMonitor:
                             f"**代码**：{code}\n"
                             f"**价格**：{info['price']:.3f}\n"
                             f"**昨收**：{info['pre_close']:.3f}\n"
-                            f"**涨跌幅**：{info['change_today']:.2f}%\n"
+                            f"**日涨跌幅**：{info['change_today']:.2f}%\n"
                             f"**触发**：\n" + "\n".join(reasons)
                         )
                     }
@@ -201,12 +198,13 @@ class ETFMonitor:
 
     # ---------- 检查逻辑 ----------
     def check(self):
-        logger.info("=============================================================================")
+        logger.info("=========================================================================")
         now = datetime.now()
 
         for etf in self.etfs:
             code = etf["code"]
             triggers = etf.get("triggers", {})
+            price_below = triggers.get("price_below", 0.0)
 
             if code in self.temp_suspended:
                 elapsed = now - self.temp_suspended[code]
@@ -229,16 +227,26 @@ class ETFMonitor:
                 del self.temp_suspended[code]
                 logger.info("%s 已复牌，恢复正常监控", code)
 
-            price_below = triggers.get("price_below")
-            logger.info("监控价:%4.3f 当前价: %4.3f (%5.2f%%) (昨收:%4.3f) (%s)%s ",
-                        price_below,
-                        price,
-                        info["change_today"],
-                        info["pre_close"],
-                        code,
-                        info["name"].ljust(15))
-            reasons = []
+            # 计算相对监控价百分比，固定占位对齐
+            if price_below and float(price_below) > 0:
+                rel_pct = (price - float(price_below)) / float(price_below) * 100
+                rel_str = f"{rel_pct:+.2f}%"
+            else:
+                rel_str = "   --   "
 
+            # 无竖线、固定宽度自动对齐
+            logger.info(
+                "监:%5.3f(%7s) 当前:%5.3f(%+5.2f%%) 昨:%5.3f (%s)%s",
+                price_below,
+                rel_str,
+                price,                
+                info["change_today"],
+                info["pre_close"],
+                code,
+                info["name"].ljust(15)
+            )
+
+            reasons = []
             if price_below is not None:
                 try:
                     if price <= float(price_below):
