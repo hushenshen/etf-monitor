@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-场内ETF监控（仅2026交易日交易时间运行）
+场内ETF监控（仅2026交易日交易时间运行）—— 支持临时停牌自动重试 + 可配置间隔
 """
 
 import requests
@@ -13,7 +13,7 @@ import re
 import os
 import datetime
 
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "etfs_to_monitor.yml")
@@ -32,9 +32,12 @@ class ETFMonitor:
         self.feishu_webhook = config.get("feishu_webhook")
         self.proxy = config.get("proxy")
         self.interval = config.get("interval", 5)
+        # 可配置：临时停牌重试间隔（分钟）
+        self.suspend_retry_min = config.get("suspend_retry_min", 5)
 
         self.notify_record = {}
         self.fail_count = {}
+        self.temp_suspended = {}  # {code: 首次失败时间}
 
         self.session = requests.Session()
         if self.proxy:
@@ -98,7 +101,7 @@ class ETFMonitor:
                 "wbp2u": "|0|0|0|web"
             }
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win664; x64) AppleWebKit/537.36",
                 "Referer": "https://quote.eastmoney.com/"
             }
 
@@ -199,25 +202,43 @@ class ETFMonitor:
     # ---------- 检查逻辑 ----------
     def check(self):
         logger.info("================================================================")
+        now = datetime.now()
 
         for etf in self.etfs:
             code = etf["code"]
             triggers = etf.get("triggers", {})
 
+            # 临时停牌：按配置时间重试
+            if code in self.temp_suspended:
+                elapsed = now - self.temp_suspended[code]
+                wait_sec = int(self.suspend_retry_min * 60 - elapsed.total_seconds())
+                if elapsed < timedelta(minutes=self.suspend_retry_min):
+                    logger.info("%s 临时停牌中（%d秒后重试）", code, max(wait_sec, 0))
+                    continue
+
+            # 获取价格
             price, info = self.get_etf_price(code)
             if not price:
                 self.fail_count[code] = self.fail_count.get(code, 0) + 1
                 if self.fail_count[code] >= 3:
-                    logger.warning("%s 连续 %d 次获取失败", code, self.fail_count[code])
+                    if code not in self.temp_suspended:
+                        self.temp_suspended[code] = now
+                        logger.warning("%s 连续3次获取失败，进入临时停牌，%d分钟重试一次", code, self.suspend_retry_min)
                 continue
 
+            # 恢复正常
             self.fail_count[code] = 0
+            if code in self.temp_suspended:
+                del self.temp_suspended[code]
+                logger.info("%s 已复牌，恢复正常监控", code)
+
+            # 正常输出
             price_below = triggers.get("price_below")
-            logger.info("监控价: %4.3f 当前价: %4.3f (%5.2f%%) (%s)%s ",   
-                        price_below, 
-                        price, 
+            logger.info("监控价: %4.3f 当前价: %4.3f (%5.2f%%) (%s)%s ",
+                        price_below,
+                        price,
                         info["change_today"],
-                        code, 
+                        code,
                         info["name"].ljust(15))
             reasons = []
 
@@ -263,6 +284,8 @@ class ETFMonitor:
                 self.check()
                 sleep_sec = self.interval
             else:
+                self.temp_suspended.clear()
+                self.fail_count.clear()
                 logger.info("非交易时间，休眠 60 秒...")
                 sleep_sec = 60
             time.sleep(sleep_sec)
@@ -276,6 +299,7 @@ def load_config():
     if sys.argv[1] == "--create":
         yaml.safe_dump({
             "interval": 5,
+            "suspend_retry_min": 5,  # 这里就是临时停牌重试分钟数
             "feishu_webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/xxx",
             "proxy": "",
             "etfs": [{
