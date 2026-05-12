@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 场内ETF监控（仅2026交易日交易时间运行）
-修复涨跌幅 + 停牌重试 + 现价/监控价百分比 + 无竖线完美对齐 + 涨跌幅彩色打印
+修复涨跌幅 + 停牌重试 + 现价/监控价百分比 + 无竖线完美对齐 + 涨跌幅彩色打印 + 前面带序号(01/02格式)
 """
 
 import requests
@@ -203,10 +203,11 @@ class ETFMonitor:
 
     # ---------- 检查逻辑 ----------
     def check(self):
-        logger.info("=========================================================================")
+        logger.info("=============================================================================")
         now = datetime.now()
 
-        for etf in self.etfs:
+        # 带序号循环
+        for idx, etf in enumerate(self.etfs, start=1):
             code = etf["code"]
             triggers = etf.get("triggers", {})
             price_below = triggers.get("price_below", 0.0)
@@ -215,7 +216,7 @@ class ETFMonitor:
                 elapsed = now - self.temp_suspended[code]
                 wait_sec = int(self.suspend_retry_min * 60 - elapsed.total_seconds())
                 if elapsed < timedelta(minutes=self.suspend_retry_min):
-                    logger.info("%s 临时停牌中（%d秒后重试）", code, max(wait_sec, 0))
+                    logger.info("[%02d] %s 临时停牌中（%d秒后重试）", idx, code, max(wait_sec, 0))
                     continue
 
             price, info = self.get_etf_price(code)
@@ -224,13 +225,13 @@ class ETFMonitor:
                 if self.fail_count[code] >= 3:
                     if code not in self.temp_suspended:
                         self.temp_suspended[code] = now
-                        logger.warning("%s 连续3次获取失败，进入临时停牌，%d分钟重试一次", code, self.suspend_retry_min)
+                        logger.warning("[%02d] %s 连续3次获取失败，进入临时停牌，%d分钟重试一次", idx, code, self.suspend_retry_min)
                 continue
 
             self.fail_count[code] = 0
             if code in self.temp_suspended:
                 del self.temp_suspended[code]
-                logger.info("%s 已复牌，恢复正常监控", code)
+                logger.info("[%02d] %s 已复牌，恢复正常监控", idx, code)
 
             # 计算相对监控价百分比，固定占位对齐
             if price_below and float(price_below) > 0:
@@ -248,9 +249,10 @@ class ETFMonitor:
             else:
                 change_color = f"{change:+5.2f}%"
 
-            # 无竖线、固定宽度自动对齐 + 彩色涨跌幅
+            # 前面带序号(01格式) + 彩色涨跌幅 + 完美对齐
             logger.info(
-                "监:%5.3f(%7s) 当前:%5.3f %s 昨:%5.3f (%s)%s",
+                "[%02d] 监:%5.3f(%7s) 当前:%5.3f %s 昨:%5.3f (%s)%s",
+                idx,
                 price_below,
                 rel_str,
                 price,
