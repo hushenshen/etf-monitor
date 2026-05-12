@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 场内ETF监控（仅2026交易日交易时间运行）
-修复涨跌幅 + 停牌重试 + 现价/监控价百分比 + 无竖线完美对齐
+修复涨跌幅 + 停牌重试 + 现价/监控价百分比 + 无竖线完美对齐 + 涨跌幅彩色打印
 """
 
 import requests
@@ -19,10 +19,15 @@ from datetime import datetime, time as dt_time, timedelta
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "etfs_to_monitor.yml")
 
+# 终端颜色定义
+RED = '\033[91m'
+GREEN = '\033[92m'
+RESET = '\033[0m'
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
@@ -234,13 +239,22 @@ class ETFMonitor:
             else:
                 rel_str = "   --   "
 
-            # 无竖线、固定宽度自动对齐
+            # 涨跌幅颜色处理
+            change = info["change_today"]
+            if change > 0:
+                change_color = f"{RED}{change:+5.2f}%{RESET}"
+            elif change < 0:
+                change_color = f"{GREEN}{change:+5.2f}%{RESET}"
+            else:
+                change_color = f"{change:+5.2f}%"
+
+            # 无竖线、固定宽度自动对齐 + 彩色涨跌幅
             logger.info(
-                "监:%5.3f(%7s) 当前:%5.3f(%+5.2f%%) 昨:%5.3f (%s)%s",
+                "监:%5.3f(%7s) 当前:%5.3f %s 昨:%5.3f (%s)%s",
                 price_below,
                 rel_str,
-                price,                
-                info["change_today"],
+                price,
+                change_color,
                 info["pre_close"],
                 code,
                 info["name"].ljust(15)
