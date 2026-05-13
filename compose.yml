@@ -2,7 +2,7 @@ services:
   etf-monitor:
     container_name: etf-monitor
     image: deeplakehss/etf-monitor:latest
-    restart: unless-stopped
+    restart: always
     volumes:
       - ./etfs_to_monitor.yml:/app/etfs_to_monitor.yml:ro
       - ./logs:/app/logs
