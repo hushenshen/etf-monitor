@@ -1,19 +1,19 @@
 import requests
 import json
 import time
+import yaml
 from datetime import datetime
 
-# ===================== 配置 =====================
-LOF_LIST = [
-    "160644",
-    "161226",
-    "161720",
-    "164906",
-    "501016",
-]
+# ===================== 读取 YML 配置 =====================
+CONFIG_FILE = "lofs_diff_monitor.yml"
 
-REFRESH_INTERVAL = 10
-# ==================================================
+with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+    config = yaml.safe_load(f)
+
+# 强制转字符串，修复 YML 数字问题
+LOF_LIST = [str(code) for code in config["lof_list"]]
+REFRESH_INTERVAL = config["refresh_interval"]
+# ========================================================
 
 def get_fund(fund_code):
     try:
@@ -51,7 +51,7 @@ def get_live_price(code):
         return None
 
 # ===================== 主程序 =====================
-print("✅ LOF折溢价监控【真实干净版】启动成功！")
+print("✅ LOF折溢价监控【配置分离版】启动成功！")
 
 while True:
     now = datetime.now().strftime("%H:%M:%S")
@@ -61,7 +61,6 @@ while True:
         fund = get_fund(code)
         price = get_live_price(code)
 
-        # 只有数据完全正常才显示
         if not fund or not price:
             print(f"⏳ {code} 数据暂未更新")
             continue
