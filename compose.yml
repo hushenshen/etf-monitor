@@ -5,7 +5,6 @@ services:
     restart: always
     volumes:
       - ./etfs_to_monitor.yml:/app/etfs_to_monitor.yml:ro
-      - ./logs:/app/logs
     environment:
       - TZ=Asia/Shanghai
     logging:
@@ -13,3 +12,20 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    command: ["python", "-u", "etf_monitor.py", "--run"]
+
+
+  lof-diff-monitor:
+    container_name: lof-diff-monitor
+    image: deeplakehss/etf-monitor:latest
+    restart: always
+    volumes:
+      - ./lofs_diff_monitor.yml:/app/lofs_diff_monitor.yml:ro
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: ["python", "-u", "lof_diff_monitor.py"]

@@ -13,10 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制代码
 COPY etf_monitor.py .
+COPY lof_diff_monitor.py .
 
 # 时区（中国）
 ENV TZ=Asia/Shanghai
 ENV PYTHONUNBUFFERED=1
 
-# 运行 + 强制实时输出
-CMD ["python", "-u", "etf_monitor.py", "--run"]
