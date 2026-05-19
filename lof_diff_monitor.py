@@ -56,19 +56,28 @@ print("✅ LOF折溢价监控【配置分离版】启动成功！")
 while True:
     now = datetime.now().strftime("%H:%M:%S")
     print(f"\n====== {now} ======")
+    # 打印表头（对齐更美观）
+    print(f"{'现价':>4} {'估值':>4} {'净值':>4} {'折溢价':>6}  基金代码 名称")
 
     for code in LOF_LIST:
         fund = get_fund(code)
         price = get_live_price(code)
 
         if not fund or not price:
-            print(f"⏳ {code} 数据暂未更新")
+            print(f"⏳ 数据暂未更新   {code}")
             continue
 
         nav = fund["nav"]
         estimate = fund["estimate"]
         rate = (price / estimate - 1) * 100
 
-        print(f"[{code}] {fund['name'][:28]:<28} | 现价:{price:>6.3f} | 估值:{estimate:>6.3f} | 净值:{nav:>6.3f} | 折溢价:{rate:>6.2f}%")
+        # 核心优化：数值在前，代码+名称统一在后
+        print(
+            f"{price:>6.3f} "
+            f"{estimate:>6.3f} "
+            f"{nav:>6.3f} "
+            f"{rate:>7.2f}%   "
+            f"{code} {fund['name']}"
+        )
 
     time.sleep(REFRESH_INTERVAL)
