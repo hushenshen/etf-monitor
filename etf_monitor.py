@@ -307,7 +307,7 @@ class ETFMonitor:
             else:
                 self.temp_suspended.clear()
                 self.fail_count.clear()
-                logger.info("非交易时间，休眠 60 秒...")
+                # logger.info("非交易时间，休眠 60 秒...")
                 sleep_sec = 60
             time.sleep(sleep_sec)
 
