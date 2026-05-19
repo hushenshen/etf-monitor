@@ -15,6 +15,7 @@ import os
 import datetime
 
 from datetime import datetime, time as dt_time, timedelta
+from utils import is_trading_time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "etfs_to_monitor.yml")
@@ -48,39 +49,6 @@ class ETFMonitor:
         if self.proxy:
             self.session.proxies = {"http": self.proxy, "https": self.proxy}
 
-    # ---------- 2026 交易日 + 交易时间判断 ----------
-    def is_trading_time(self):
-        now = datetime.now()
-        weekday = now.weekday()
-        current_time = now.time()
-        today_str = now.strftime("%Y-%m-%d")
-
-        if weekday >= 5:
-            return False
-
-        holiday_list = {
-            "2026-01-01", "2026-01-02", "2026-01-03",
-            "2026-02-15", "2026-02-16", "2026-02-17", "2026-02-18",
-            "2026-02-19", "2026-02-20", "2026-02-21", "2026-02-22", "2026-02-23",
-            "2026-04-04", "2026-04-05", "2026-04-06",
-            "2026-05-01", "2026-05-02", "2026-05-03", "2026-05-04", "2026-05-05",
-            "2026-06-19", "2026-06-20", "2026-06-21",
-            "2026-09-25", "2026-09-26", "2026-09-27",
-            "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04",
-            "2026-10-05", "2026-10-06", "2026-10-07"
-        }
-        if today_str in holiday_list:
-            return False
-
-        am_start = dt_time(9, 30)
-        am_end = dt_time(11, 30)
-        pm_start = dt_time(13, 0)
-        pm_end = dt_time(15, 0)
-
-        in_am = am_start <= current_time <= am_end
-        in_pm = pm_start <= current_time <= pm_end
-
-        return in_am or in_pm
 
     # ---------- 价格获取（修复涨跌幅） ----------
     def get_etf_price(self, code):
@@ -301,7 +269,7 @@ class ETFMonitor:
     def run(self):
         logger.info("ETF监控启动（2026 交易日 9:30-11:30/13:00-15:00）")
         while True:
-            if self.is_trading_time():
+            if is_trading_time():
                 self.check()
                 sleep_sec = self.interval
             else:

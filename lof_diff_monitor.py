@@ -3,6 +3,8 @@ import json
 import time
 import yaml
 from datetime import datetime
+from utils import is_trading_time
+
 
 # ===================== 读取 YML 配置 =====================
 CONFIG_FILE = "lofs_diff_monitor.yml"
@@ -54,6 +56,14 @@ def get_live_price(code):
 print("✅ LOF折溢价监控【配置分离版】启动成功！")
 
 while True:
+    # ========== 交易时间判断：只有交易时间才执行监控 ==========
+    if not is_trading_time():
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # print(f"[{now}] 非交易时间，等待60秒后重新判断...")
+        time.sleep(60)
+        continue
+
+    # ========== 交易时间：执行原有逻辑 ==========
     now = datetime.now().strftime("%H:%M:%S")
     print(f"\n====== {now} ======")
     # 打印表头（对齐更美观）

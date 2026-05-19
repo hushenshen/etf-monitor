@@ -8,12 +8,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Python依赖
-COPY requirements.txt .
+COPY requirements.txt  .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制代码
-COPY etf_monitor.py .
-COPY lof_diff_monitor.py .
+COPY *.py .
 
 # 时区（中国）
 ENV TZ=Asia/Shanghai
