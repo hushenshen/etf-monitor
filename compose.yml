@@ -28,4 +28,4 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    command: ["python", "-u", "lof_diff_monitor.py"]
+    command: ["python", "-u", "lof_diff_monitor.py", "--run"]
