@@ -268,6 +268,9 @@ class ETFMonitor:
     # ---------- 主循环 ----------
     def run(self):
         logger.info("ETF监控启动（2026 交易日 9:30-11:30/13:00-15:00）")
+        # 首次启动：无论是否交易时间，立即执行一次检查
+        logger.info("首次启动，立即执行一次检查...")
+        self.check()
         while True:
             if is_trading_time():
                 self.check()

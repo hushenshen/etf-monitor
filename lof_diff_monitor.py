@@ -172,13 +172,9 @@ if FEISHU_WEBHOOK:
 else:
     print("⚠️ 未配置 feishu_webhook，仅打印监控")
 
-while True:
-    # ========== 交易时间判断：只有交易时间才执行监控 ==========
-    if not is_trading_time():
-        time.sleep(60)
-        continue
 
-    # ========== 交易时间：执行原有逻辑 ==========
+def run_check():
+    """执行一次完整的折溢价检查"""
     now = datetime.now().strftime("%H:%M:%S")
     print(f"\n====== {now} ======")
     print(f"{'现价':>6} {'估值':>6} {'净值':>6} {'折溢价':>7} {'门限':>6}  基金代码 名称")
@@ -214,4 +210,16 @@ while True:
         if threshold < 999 and rate < threshold:
             send_feishu(code, fund["name"], price, estimate, nav, rate, threshold)
 
+
+# 首次启动：无论是否交易时间，立即执行一次检查
+print("首次启动，立即执行一次检查...")
+run_check()
+
+while True:
+    # ========== 交易时间判断：只有交易时间才执行监控 ==========
+    if not is_trading_time():
+        time.sleep(60)
+        continue
+
+    run_check()
     time.sleep(REFRESH_INTERVAL)
