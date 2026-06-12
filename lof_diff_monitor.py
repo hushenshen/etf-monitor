@@ -122,7 +122,7 @@ def get_live_price(code):
 
 
 def send_feishu(code, name, price, estimate, nav, rate, threshold):
-    """溢价超过门限时推送飞书卡片通知"""
+    """溢价低于门限时推送飞书卡片通知"""
     today = datetime.now().date()
     if notify_record.get(code) == today:
         return
@@ -149,7 +149,7 @@ def send_feishu(code, name, price, estimate, nav, rate, threshold):
                             f"**估值**：{estimate:.3f}\n"
                             f"**净值**：{nav:.3f}\n"
                             f"**溢价率**：{rate:+.2f}%\n"
-                            f"**预警门限**：>{threshold}%"
+                            f"**预警门限**：<{threshold}%"
                         ),
                     },
                 }
@@ -199,7 +199,7 @@ while True:
         rate = (price / estimate - 1) * 100
 
         # 门限显示：<999 表示有效门限，否则显示 --
-        threshold_str = f">{threshold}%" if threshold < 999 else "--"
+        threshold_str = f"<{threshold}%" if threshold < 999 else "--"
 
         print(
             f"{price:>6.3f} "
@@ -210,8 +210,8 @@ while True:
             f"{code} {fund['name']}"
         )
 
-        # 溢价超过门限 → 推送飞书
-        if threshold < 999 and rate > threshold:
+        # 溢价低于门限 → 推送飞书
+        if threshold < 999 and rate < threshold:
             send_feishu(code, fund["name"], price, estimate, nav, rate, threshold)
 
     time.sleep(REFRESH_INTERVAL)
