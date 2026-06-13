@@ -2,6 +2,7 @@ services:
   etf-monitor:
     container_name: etf-monitor
     image: deeplakehss/etf-monitor:latest
+    pull_policy: always
     restart: always
     volumes:
       - ./etfs_to_monitor.yml:/app/etfs_to_monitor.yml:ro
@@ -18,6 +19,7 @@ services:
   lof-diff-monitor:
     container_name: lof-diff-monitor
     image: deeplakehss/etf-monitor:latest
+    pull_policy: always
     restart: always
     volumes:
       - ./lofs_diff_monitor.yml:/app/lofs_diff_monitor.yml:ro
