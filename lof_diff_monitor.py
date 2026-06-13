@@ -160,9 +160,8 @@ def send_feishu(code, name, price, estimate, nav, rate, threshold):
     try:
         requests.post(FEISHU_WEBHOOK, json=card, timeout=10)
         notify_record[code] = today
-        print(f"  📤 已推送飞书预警：{name}({code}) 溢价 {rate:+.2f}%")
     except Exception as e:
-        print(f"  ⚠️ 飞书推送失败：{e}")
+        print(f"  ⚠️ 飞书推送失败 [{code}]：{e}")
 
 
 # ===================== 主程序 =====================
@@ -177,7 +176,7 @@ def run_check():
     """执行一次完整的折溢价检查"""
     now = datetime.now().strftime("%H:%M:%S")
     print(f"\n====== {now} ======")
-    print(f"{'现价':>6} {'估值':>6} {'净值':>6} {'折溢价':>7} {'门限':>6}  基金代码 名称")
+    print(f"{'现价':>8}{'估值':>8}{'净值':>8}{'折溢价':>10}{'门限':>8}  基金代码  名称")
 
     for item in LOF_ITEMS:
         code = item["code"]
@@ -187,7 +186,7 @@ def run_check():
         price = get_live_price(code)
 
         if not fund or not price:
-            print(f"⏳ 数据暂未更新         {'--':>6}   {code}")
+            print(f"⏳ 数据暂未更新                                  {code}")
             continue
 
         nav = fund["nav"]
@@ -197,17 +196,21 @@ def run_check():
         # 门限显示：<999 表示有效门限，否则显示 --
         threshold_str = f"<{threshold}%" if threshold < 999 else "--"
 
+        # 溢价低于门限 → 推送飞书（先判断，以便同行显示推送标记）
+        will_push = (threshold < 999 and rate < threshold
+                     and notify_record.get(code) != datetime.now().date())
+        push_indicator = "  📤 已推送" if will_push else ""
+
         print(
-            f"{price:>6.3f} "
-            f"{estimate:>6.3f} "
-            f"{nav:>6.3f} "
-            f"{rate:>+7.2f}% "
-            f"{threshold_str:>6}   "
-            f"{code} {fund['name']}"
+            f"{price:>8.3f} "
+            f"{estimate:>8.3f} "
+            f"{nav:>8.3f} "
+            f"{rate:>+8.2f}% "
+            f"{threshold_str:>8}  "
+            f"{code}  {fund['name']}{push_indicator}"
         )
 
-        # 溢价低于门限 → 推送飞书
-        if threshold < 999 and rate < threshold:
+        if will_push:
             send_feishu(code, fund["name"], price, estimate, nav, rate, threshold)
 
 
