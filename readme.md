@@ -154,3 +154,53 @@ docker run -d \
 - 同一天同一代码的飞书告警只会推送一次，避免重复打扰。
 
 > （注：文档部分内容可能由 AI 生成）
+
+### 全市场溢价率扫描 (`fund_premium_scanner.py`)
+
+扫描全市场 ETF + LOF 基金，实时计算溢价率，按溢价从高到低和从低到高分别列出 Top N，并通过飞书推送报告摘要。
+
+- **ETF 溢价率**：基于交易所 IOPV（实时参考净值）计算
+- **LOF 溢价率**：基于天天基金实时估算净值（gsz）计算
+- 溢价率 = (交易价格 - 估算净值) / 估算净值 × 100%
+- 当溢价率超过设定门限时推送飞书预警
+- 自动生成 Markdown 报告和 CSV 数据文件
+
+### 2.4 全市场溢价率扫描配置
+
+配置文件：`fund_premium_scanner.yml`
+
+```yaml
+refresh_interval: 300          # 扫描间隔（秒）
+top_n: 20                      # 溢价/折价排行榜显示数量
+lof_top_volume: 200            # LOF 按成交额取前 N 只
+min_turnover_etf: 100000       # ETF 最低成交额过滤（元）
+push_premium_threshold: 10.0   # 溢价率超过此值推送预警
+push_discount_threshold: -10.0 # 折价率超过此值推送预警
+output_dir: "/app/output"      # 报告输出目录
+feishu_webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/XXX"
+```
+
+```bash
+# 生成配置文件模板
+python fund_premium_scanner.py --create
+
+# 启动扫描
+python fund_premium_scanner.py --run
+```
+
+### 3.3 启动全市场溢价率扫描
+
+```bash
+# docker-compose 方式（推荐）
+docker compose up -d fund-premium-scanner
+
+# docker run 方式
+docker run -d \
+  -v $(pwd)/fund_premium_scanner.yml:/app/fund_premium_scanner.yml:ro \
+  -v $(pwd)/output:/app/output \
+  --name fund-premium-scanner \
+  deeplakehss/etf-monitor:latest \
+  python -u fund_premium_scanner.py --run
+```
+
+> **output 目录**：扫描器会在此目录下生成 Markdown 报告和 CSV 数据文件，通过 volume 挂载持久化到宿主机。

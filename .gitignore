@@ -1,3 +1,5 @@
 __pycache__
 etfs_to_monitor.yml
 lofs_diff_monitor.yml
+fund_premium_scanner.yml
+output/
