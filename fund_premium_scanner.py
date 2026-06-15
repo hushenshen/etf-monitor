@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-全市场 LOF/ETF 溢价率扫描器
+全市场 LOF 溢价率扫描器
 ============================
-扫描全市场 ETF + LOF 基金，实时计算溢价率，
+扫描全市场 LOF 基金（排除封闭式基金），实时计算溢价率，
 按溢价从高到低/从低到高分别列出 Top N，并通过飞书推送报告。
 
 核心逻辑:
-1. ETF: 通过东方财富 push2delay API 获取含 IOPV 的实时行情
-2. LOF: 东方财富 API 获取市场价 + 天天基金实时估值(gsz) → 计算溢价率
+1. 东方财富 API 获取 LOF 市场价
+2. 天天基金实时估值(gsz) → 计算溢价率（排除名称含"封闭"的封闭式基金）
 3. 溢价率 = (交易价格 - 估算净值) / 估算净值 × 100%
 
 用法:
@@ -56,14 +56,13 @@ FUND_HEADERS = {
 
 
 class FundPremiumScanner:
-    """全市场 LOF/ETF 溢价率扫描器"""
+    """全市场 LOF 溢价率扫描器（排除封闭式基金）"""
 
     def __init__(self, config):
         self.feishu_webhook = config.get("feishu_webhook", "")
         self.refresh_interval = config.get("refresh_interval", 300)
         self.top_n = config.get("top_n", 20)
         self.lof_top_volume = config.get("lof_top_volume", 200)
-        self.min_turnover_etf = config.get("min_turnover_etf", 100000)
         self.push_premium_threshold = config.get("push_premium_threshold", 10.0)
         self.push_discount_threshold = config.get("push_discount_threshold", -10.0)
         self.output_dir = config.get("output_dir", "/app/output")
@@ -74,85 +73,11 @@ class FundPremiumScanner:
         # 确保输出目录
         os.makedirs(self.output_dir, exist_ok=True)
 
-    # ==================== ETF 数据获取 ====================
-
-    def fetch_etf_spot(self):
-        """获取 ETF 实时行情（含 IOPV 实时估值）- 通过东方财富 push2delay API"""
-        logger.info("[1/4] 获取 ETF 实时行情（含 IOPV）...")
-
-        url = "https://push2delay.eastmoney.com/api/qt/clist/get"
-        all_data = []
-        page = 1
-
-        while True:
-            params = {
-                "pn": page,
-                "pz": 500,
-                "po": 1,
-                "np": 1,
-                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
-                "fltt": 2,
-                "invt": 2,
-                "wbp2u": "|0|0|0|web",
-                "fid": "f3",
-                "fs": "b:MK0021,b:MK0022,b:MK0023,b:MK0024,b:MK0025",
-                "fields": "f2,f3,f6,f12,f14,f18,f128,f136",
-                "_": int(time.time() * 1000),
-            }
-            try:
-                resp = self.session.get(url, params=params, headers=EM_HEADERS, timeout=15)
-                data = resp.json()
-                if data.get("data") and data["data"].get("diff"):
-                    items = data["data"]["diff"]
-                    all_data.extend(items)
-                    total = data["data"]["total"]
-                    if page * 500 >= total:
-                        break
-                    page += 1
-                else:
-                    break
-            except Exception as e:
-                logger.warning("  ETF 数据获取异常: %s", e)
-                break
-            time.sleep(0.3)
-
-        if not all_data:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(all_data)
-        col_map = {"f12": "代码", "f14": "名称", "f2": "最新价", "f3": "涨跌幅",
-                   "f6": "成交额", "f18": "昨日净值", "f128": "估算净值", "f136": "基金折价率"}
-        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
-
-        for col in ["最新价", "估算净值", "基金折价率", "涨跌幅", "成交额", "昨日净值"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        # 溢价率 = -折价率
-        df["溢价率(%)"] = -df["基金折价率"]
-
-        # 过滤无效数据
-        df = df[
-            (df["估算净值"] > 0) &
-            (df["最新价"] > 0) &
-            (df["成交额"] > self.min_turnover_etf)
-        ].copy()
-
-        df["类型"] = "ETF"
-        df["估值来源"] = "IOPV"
-
-        keep_cols = [c for c in ["代码", "名称", "类型", "最新价", "昨日净值", "估算净值",
-                                  "溢价率(%)", "估值来源", "成交额"] if c in df.columns]
-        result = df[keep_cols].reset_index(drop=True)
-
-        logger.info("  获取到 %d 只有效 ETF", len(result))
-        return result
-
     # ==================== LOF 数据获取 ====================
 
     def fetch_lof_spot(self):
         """获取 LOF 实时行情（市场价）- 通过东方财富 API"""
-        logger.info("[2/4] 获取 LOF 实时行情...")
+        logger.info("[1/3] 获取 LOF 实时行情...")
 
         url = "https://88.push2.eastmoney.com/api/qt/clist/get"
         all_data = []
@@ -206,6 +131,12 @@ class FundPremiumScanner:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
+        # 排除封闭式基金（名称含"封闭"）
+        if "名称" in df.columns:
+            before = len(df)
+            df = df[~df["名称"].str.contains("封闭", na=False)]
+            logger.info("  排除封闭式基金: %d → %d 只", before, len(df))
+
         # 按成交额排序，只保留活跃的
         if "成交额" in df.columns:
             df = df.sort_values("成交额", ascending=False).head(self.lof_top_volume).reset_index(drop=True)
@@ -217,7 +148,7 @@ class FundPremiumScanner:
 
     def fetch_lof_nav(self, fund_codes):
         """批量获取 LOF 基金昨日净值和实时估值（天天基金接口）"""
-        logger.info("[3/4] 获取 LOF 基金实时估值（共 %d 只）...", len(fund_codes))
+        logger.info("[2/3] 获取 LOF 基金实时估值（共 %d 只）...", len(fund_codes))
 
         nav_dict = {}
         success_count = 0
@@ -253,7 +184,7 @@ class FundPremiumScanner:
 
     def calculate_lof_premium(self, lof_df, nav_dict):
         """计算 LOF 溢价率"""
-        logger.info("[4/4] 计算 LOF 溢价率...")
+        logger.info("[3/3] 计算 LOF 溢价率...")
 
         results = []
         no_estimate_codes = []
@@ -330,7 +261,7 @@ class FundPremiumScanner:
         premium_lines = []
         for i, (_, row) in enumerate(premium_top.head(10).iterrows(), 1):
             premium_lines.append(
-                f"{i}. {row['代码']} {row['名称']} [{row['类型']}] "
+                f"{i}. {row['代码']} {row['名称']} "
                 f"溢价{row['溢价率(%)']:+.2f}%"
             )
 
@@ -338,7 +269,7 @@ class FundPremiumScanner:
         discount_lines = []
         for i, (_, row) in enumerate(discount_top.head(10).iterrows(), 1):
             discount_lines.append(
-                f"{i}. {row['代码']} {row['名称']} [{row['类型']}] "
+                f"{i}. {row['代码']} {row['名称']} "
                 f"溢价{row['溢价率(%)']:+.2f}%"
             )
 
@@ -368,7 +299,7 @@ class FundPremiumScanner:
             self.send_feishu(
                 f"【高溢价预警】{row['名称']}",
                 f"**基金**：{row['名称']}\n"
-                f"**代码**：{row['代码']} [{row['类型']}]\n"
+                f"**代码**：{row['代码']}\n"
                 f"**现价**：{row['最新价']:.3f}\n"
                 f"**估值**：{row['估算净值']:.4f}\n"
                 f"**溢价率**：{row['溢价率(%)']:+.2f}%\n"
@@ -385,7 +316,7 @@ class FundPremiumScanner:
             self.send_feishu(
                 f"【深折价预警】{row['名称']}",
                 f"**基金**：{row['名称']}\n"
-                f"**代码**：{row['代码']} [{row['类型']}]\n"
+                f"**代码**：{row['代码']}\n"
                 f"**现价**：{row['最新价']:.3f}\n"
                 f"**估值**：{row['估算净值']:.4f}\n"
                 f"**溢价率**：{row['溢价率(%)']:+.2f}%\n"
@@ -404,11 +335,11 @@ class FundPremiumScanner:
         discount_top = df.sort_values("溢价率(%)", ascending=True).head(self.top_n).reset_index(drop=True)
 
         lines = []
-        lines.append(f"# LOF/ETF 基金溢价率扫描报告")
+        lines.append(f"# LOF 基金溢价率扫描报告")
         lines.append(f"")
         lines.append(f"> 扫描时间: {now.strftime('%Y-%m-%d %H:%M')}")
         lines.append(f"> 数据来源: 东方财富实时行情 + 天天基金实时估值")
-        lines.append(f"> 有效基金数: {len(df)} (ETF {(df['类型']=='ETF').sum()} + LOF {(df['类型']=='LOF').sum()})")
+        lines.append(f"> 有效基金数: {len(df)}")
         lines.append(f"")
         lines.append(f"---")
         lines.append(f"")
@@ -416,14 +347,14 @@ class FundPremiumScanner:
         # 溢价排行
         lines.append(f"## 一、溢价率 Top {self.top_n}（从高到低）")
         lines.append(f"")
-        lines.append(f"| 排名 | 代码 | 名称 | 类型 | 最新价 | 估算净值 | 溢价率(%) | 估值来源 | 成交额(万) |")
-        lines.append(f"|:---:|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---:|")
+        lines.append(f"| 排名 | 代码 | 名称 | 最新价 | 估算净值 | 溢价率(%) | 成交额(万) |")
+        lines.append(f"|:---:|:---:|:---|:---:|:---:|:---:|:---:|")
         for rank, (_, row) in enumerate(premium_top.iterrows(), 1):
             amt = row['成交额'] / 10000 if pd.notna(row['成交额']) else 0
             lines.append(
-                f"| {rank} | {row['代码']} | {row['名称']} | {row['类型']} | "
+                f"| {rank} | {row['代码']} | {row['名称']} | "
                 f"{row['最新价']} | {row['估算净值']} | **{row['溢价率(%)']:+.2f}%** | "
-                f"{row['估值来源']} | {amt:.0f} |"
+                f"{amt:.0f} |"
             )
         lines.append(f"")
         lines.append(f"---")
@@ -432,14 +363,14 @@ class FundPremiumScanner:
         # 折价排行
         lines.append(f"## 二、折价率 Top {self.top_n}（从低到高）")
         lines.append(f"")
-        lines.append(f"| 排名 | 代码 | 名称 | 类型 | 最新价 | 估算净值 | 溢价率(%) | 估值来源 | 成交额(万) |")
-        lines.append(f"|:---:|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---:|")
+        lines.append(f"| 排名 | 代码 | 名称 | 最新价 | 估算净值 | 溢价率(%) | 成交额(万) |")
+        lines.append(f"|:---:|:---:|:---|:---:|:---:|:---:|:---:|")
         for rank, (_, row) in enumerate(discount_top.iterrows(), 1):
             amt = row['成交额'] / 10000 if pd.notna(row['成交额']) else 0
             lines.append(
-                f"| {rank} | {row['代码']} | {row['名称']} | {row['类型']} | "
+                f"| {rank} | {row['代码']} | {row['名称']} | "
                 f"{row['最新价']} | {row['估算净值']} | **{row['溢价率(%)']:+.2f}%** | "
-                f"{row['估值来源']} | {amt:.0f} |"
+                f"{amt:.0f} |"
             )
         lines.append(f"")
         lines.append(f"---")
@@ -472,16 +403,15 @@ class FundPremiumScanner:
     def print_summary(self, df, premium_top, discount_top):
         """终端彩色打印溢价率摘要"""
         print("\n" + "=" * 70)
-        print(f"  全市场 LOF/ETF 溢价率扫描  {datetime.now().strftime('%H:%M:%S')}")
-        print(f"  有效基金: {CYAN}{len(df)}{RESET} 只 "
-              f"(ETF {(df['类型']=='ETF').sum()} + LOF {(df['类型']=='LOF').sum()})")
+        print(f"  全市场 LOF 溢价率扫描  {datetime.now().strftime('%H:%M:%S')}")
+        print(f"  有效基金: {CYAN}{len(df)}{RESET} 只")
         print("=" * 70)
 
         print(f"\n  {RED}🔴 溢价率 Top {self.top_n}{RESET}")
         for i, (_, row) in enumerate(premium_top.iterrows(), 1):
             pct = row['溢价率(%)']
             color = RED if pct > 5 else (YELLOW if pct > 2 else RESET)
-            print(f"    {i:2d}. {row['代码']} {row['名称'][:10]:<10} [{row['类型']}] "
+            print(f"    {i:2d}. {row['代码']} {row['名称'][:10]:<10} "
                   f"价格:{row['最新价']:>7.3f} 估值:{row['估算净值']:>7.4f} "
                   f"溢价:{color}{pct:+7.2f}%{RESET}")
 
@@ -489,7 +419,7 @@ class FundPremiumScanner:
         for i, (_, row) in enumerate(discount_top.iterrows(), 1):
             pct = row['溢价率(%)']
             color = GREEN if pct < -5 else (YELLOW if pct < -2 else RESET)
-            print(f"    {i:2d}. {row['代码']} {row['名称'][:10]:<10} [{row['类型']}] "
+            print(f"    {i:2d}. {row['代码']} {row['名称'][:10]:<10} "
                   f"价格:{row['最新价']:>7.3f} 估值:{row['估算净值']:>7.4f} "
                   f"溢价:{color}{pct:+7.2f}%{RESET}")
         print("=" * 70)
@@ -503,42 +433,32 @@ class FundPremiumScanner:
         logger.info("  溢价率扫描开始 %s", now_str)
         logger.info("=" * 60)
 
-        # 1. 获取 ETF 数据
-        etf_df = self.fetch_etf_spot()
-
-        # 2. 获取 LOF 数据
+        # 1. 获取 LOF 行情
         lof_df = self.fetch_lof_spot()
 
-        # 3. 获取 LOF 实时估值
-        lof_results = pd.DataFrame()
-        if not lof_df.empty:
-            fund_codes = lof_df["代码"].astype(str).tolist()
-            nav_dict = self.fetch_lof_nav(fund_codes)
-            lof_results = self.calculate_lof_premium(lof_df, nav_dict)
+        if lof_df.empty:
+            logger.warning("未获取到 LOF 行情数据")
+            return
 
-        # 4. 合并结果
-        frames = []
-        if not etf_df.empty:
-            frames.append(etf_df)
-        if not lof_results.empty:
-            frames.append(lof_results)
+        # 2. 获取实时估值 + 3. 计算溢价率
+        fund_codes = lof_df["代码"].astype(str).tolist()
+        nav_dict = self.fetch_lof_nav(fund_codes)
+        all_results = self.calculate_lof_premium(lof_df, nav_dict)
 
-        if not frames:
+        if all_results.empty:
             logger.warning("未获取到有效数据")
             return
 
-        all_results = pd.concat(frames, ignore_index=True)
         all_results = all_results.sort_values("溢价率(%)", ascending=False).reset_index(drop=True)
-
         logger.info("总计有效基金: %d 只", len(all_results))
 
-        # 5. 生成报告
+        # 4. 生成报告
         premium_top, discount_top = self.generate_report(all_results)
 
-        # 6. 终端打印
+        # 5. 终端打印
         self.print_summary(all_results, premium_top, discount_top)
 
-        # 7. 飞书推送
+        # 6. 飞书推送
         self.push_premium_report(premium_top, discount_top)
         self.push_threshold_alerts(all_results)
 
@@ -578,7 +498,6 @@ def load_config():
             "refresh_interval": 300,
             "top_n": 20,
             "lof_top_volume": 200,
-            "min_turnover_etf": 100000,
             "push_premium_threshold": 10.0,
             "push_discount_threshold": -10.0,
             "output_dir": "/app/output",
